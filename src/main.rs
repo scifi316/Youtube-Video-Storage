@@ -1,6 +1,9 @@
 // Parse text file into byte stream
 use std::fs::File;
 use std::io::{self, Read};
+use image;
+
+mod nnscale;
 
 // Read file into a vector of bytes
 fn read_file_vec8(file_path: &str) -> io::Result<Vec<u8>> {
@@ -28,10 +31,12 @@ fn main() -> io::Result<()> {
     let content_str = read_file_str(file_path)?;
 
     for byte in &content_vec8 {
-        print!("{:02X} ", byte);
+        print!("{:02X?} ", byte);
     }
 
     println!("\nText content: {}", content_str);
+
+    let img = nnscale::new_image(None, None, content_vec8);
 
     Ok(())
 }
