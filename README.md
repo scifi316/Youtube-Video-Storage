@@ -28,4 +28,5 @@ HDR stands for High Dyanmic Range, which is used for media formats to encode a h
 YouTube supports such formats by allowing uploads in HEVC/H.265(an extension of H.264/MP4 videos). This broadens the allowable bitrate streaming that YouTube could provide on the player and reduced compression artifacts by allowing so. This is most useful when trying to maximize storage capabilities of the videos by extending the color range and leaving more bitrate to play with.
 
 <!-- Links & Images -->
-[Rust-url]: https://www.rust-lang.org/static/images/rust-logo-blk.svg
+[Rust-lang.org]: https://www.rust-lang.org/static/images/rust-logo-blk.svg
+[Rust-url]: https://www.rust-lang.org
