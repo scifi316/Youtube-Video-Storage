@@ -1,7 +1,6 @@
 // Parse text file into byte stream
 use std::fs::File;
 use std::io::{self, Read};
-use image::{self};
 
 mod nnscale;
 
@@ -36,7 +35,7 @@ fn main() -> io::Result<()> {
 
     println!("\nText content: {}", content_str);
 
-    let img = nnscale::new_image(None, None, content_vec8);
+    let img = nnscale::new_image(Some(240), Some(135), content_vec8);
     img?.save("output.png").unwrap();
 
     Ok(())
