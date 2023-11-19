@@ -7,6 +7,7 @@ pub fn new_image(width: Option<u32>, height: Option<u32>, data: Vec<u8>) -> io::
 
     for (_x, _y, pixel) in byte_img.enumerate_pixels_mut() {
         *pixel = image::Luma([0]);
+        // *pixel = image::Rgb([0, 0, 0]);  // Set all pixels to black in RGB mode
     }
 
     //  TO-DO
@@ -20,7 +21,7 @@ pub fn new_image(width: Option<u32>, height: Option<u32>, data: Vec<u8>) -> io::
             let index = match width {
                 Some(w) => (y * w) + x,
                 None => {
-                    240
+                    240 // Default width
                 }
             };
 

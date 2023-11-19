@@ -27,13 +27,13 @@ fn main() -> io::Result<()> {
     let file_path = "input.txt";
     
     let content_vec8 = read_file_vec8(file_path)?;
-    let content_str = read_file_str(file_path)?;
+    //let content_str = read_file_str(file_path)?;
 
-    for byte in &content_vec8 {
-        print!("{:X?} ", byte);
-    }
+    // for byte in &content_vec8 {
+    //     print!("{:X?} ", byte);
+    // }
 
-    println!("\nText content: {}", content_str);
+    //println!("\nText content: {}", content_str);
 
     let img = nnscale::new_image(Some(240), Some(135), content_vec8);
     img?.save("output.png").unwrap();
