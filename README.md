@@ -16,16 +16,25 @@ This is how it breaksdown for videos using HDR: [(Why HDR?)](#why-hdr)
 
 More information from Google [here](https://support.google.com/youtube/answer/1722171?sjid=17386503199810077283-NA#zippy=%2Cbitrate) on recommended bitrates.
 
-## Acknowledgements
-
- - [![Rust][Rust-lang.org]][Rust-url]
- - [https://github.com/image-rs/image]
-
 ## Why HDR
 
 HDR stands for High Dyanmic Range, which is used for media formats to encode a higher "range" of colors and luminosities dependent on the format to allow for greater fidelity than that of SDR formats.
 
 YouTube supports such formats by allowing uploads in HEVC/H.265(an extension of H.264/MP4 videos). This broadens the allowable bitrate streaming that YouTube could provide on the player and reduced compression artifacts by allowing so. This is most useful when trying to maximize storage capabilities of the videos by extending the color range and leaving more bitrate to play with.
+
+## Using CRC
+
+CRC(Cyclc Redundancy Check) allows for verifying and help with troubleshooting corrupted information, its usage here is implemented in the form of CRC-24/OPENPGP. This implementation has a hamming distance of 6, this allows for about 1.5 pixels in a column to be corrupted or invalid, and with the right check, be allowed to be resolved later in verification.
+
+A later revision of the CRC may ultilize CRC-32, having the Alpha channel in an RGBA pixel store its signature as a [<u8>, <u8>, <u8>, <u8>] vector. The u32 from the CRC-32 will be modified in little-endian form.
+
+## Acknowledgements
+
+ - [![Rust][Rust-lang.org]][Rust-url]
+ - [https://github.com/image-rs/image]
+ - [https://github.com/mrhooray/crc-rs]
+
+## Checklist
 
 <!-- Links & Images -->
 [Rust-lang.org]: https://www.rust-lang.org/static/images/rust-logo-blk.svg
