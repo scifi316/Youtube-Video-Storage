@@ -3,6 +3,7 @@ use std::fs::File;
 use std::io::{self, Read};
 
 mod nnscale;
+mod CRC_24;
 
 // Read file into a vector of bytes
 fn read_file_vec8(file_path: &str) -> io::Result<Vec<u8>> {
@@ -15,14 +16,14 @@ fn read_file_vec8(file_path: &str) -> io::Result<Vec<u8>> {
 }
 
 // Read file into a string
-fn read_file_str(file_path: &str) -> io::Result<String> {
-    let mut file = File::open(file_path)?;
-    let mut content = String::new();
+// fn read_file_str(file_path: &str) -> io::Result<String> {
+//     let mut file = File::open(file_path)?;
+//     let mut content = String::new();
 
-    file.read_to_string(&mut content)?;
+//     file.read_to_string(&mut content)?;
 
-    Ok(content)
-}
+//     Ok(content)
+// }
 fn main() -> io::Result<()> {
     let file_path = "input.txt";
     
@@ -35,8 +36,17 @@ fn main() -> io::Result<()> {
 
     //println!("\nText content: {}", content_str);
 
-    let img = nnscale::new_image(Some(240), Some(135), content_vec8);
-    img?.save("output.png").unwrap();
+    let img = nnscale::new_image(Some(240), Some(135), content_vec8)?.clone();
+
+    let _ = &img.save("output.png").unwrap();
+    
+    let crc = CRC_24::gen_col_crc24(&img, 0);
+
+    println!("CRC: {:X?}", crc);
+
+    let crc_img = CRC_24::gen_img_crc(&img);
+
+    let _ = &crc_img?.save("output_crc.png").unwrap();
 
     Ok(())
 }

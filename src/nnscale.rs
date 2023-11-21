@@ -3,7 +3,7 @@ use std::vec::Vec;
 use std::io::{self};
 
 pub fn new_image(width: Option<u32>, height: Option<u32>, data: Vec<u8>) -> io::Result<ImageBuffer<Luma<u8>, Vec<u8>>>{
-    let mut byte_img = ImageBuffer::new(width.unwrap_or(240), height.unwrap_or(135)); // Default image size is 96x54
+    let mut byte_img = ImageBuffer::new(width.unwrap_or(240), height.unwrap_or(135)); // Default image size is 240x135
 
     for (_x, _y, pixel) in byte_img.enumerate_pixels_mut() {
         *pixel = image::Luma([0]);
