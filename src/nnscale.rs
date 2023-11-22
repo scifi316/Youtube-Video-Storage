@@ -1,4 +1,4 @@
-use image::{ImageBuffer, Luma, Rgb, Pixel, GenericImageView};
+use image::{ImageBuffer, Luma, Rgb};
 use std::vec::Vec;
 use std::io::{self};
 
@@ -10,10 +10,6 @@ pub fn new_image(width: Option<u32>, height: Option<u32>, data: Vec<u8>) -> io::
         // *pixel = image::Rgb([0, 0, 0]);  // Set all pixels to black in RGB mode
     }
 
-    //  TO-DO
-    //  Rework to allow for any size image; the vector can only be accessed as a 2D array, so coordinates must be calculated to access the correct value.
-    //  Future access for variables stored in 'data' can be calculated with the following: data[(y*width)+x]
-    //  Also change for loop to be able to access variable lengths of the vector, as it is currently hardcoded to 96x54
     for y in 0..height.unwrap() {    // Run through image, set each pixel as the contents of the vector(data)
         for x in 0..width.unwrap() {
             let pixel = byte_img.get_pixel_mut(x, y);
@@ -41,18 +37,27 @@ pub fn rescale(img: &ImageBuffer<Rgb<u8>, Vec<u8>>, scale: Option<u32>, scale_ty
     let (width, height) = img.dimensions();
     let mut rescaled_img: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::new(width*scale.unwrap_or(8), height*scale.unwrap_or(8));
 
+    // TO-DO: Implement other scaling types
+    // TO-DO: Clean up/optimize nearest neighbor scaling algorithm
     if scale_type == "nearest" {
-        for (x, y, pixel) in rescaled_img.enumerate_pixels_mut() {
+        for (_x, _y, pixel) in rescaled_img.enumerate_pixels_mut() {
             *pixel = image::Rgb([0, 0, 0]);     // Set all pixels to black in RGB for now
         }
-        let mut k = 0;
-        for x in k..(k+1)*scale.unwrap()-1 {
-            for y in k..(k+1)*scale.unwrap()-1 {
-                let pixel = rescaled_img.get_pixel_mut(x, y);
 
-                *pixel = img.get_pixel(x, y).to_rgb();
+        for (x, y, _pixel_img) in img.enumerate_pixels() {  // Run through image, set each pixel as the contents of the vector(data)
+            for xs in x*scale.unwrap()..(x+1)*scale.unwrap() {
+                for ys in y*scale.unwrap()..(y+1)*scale.unwrap() {
+                    let pixel = rescaled_img.get_pixel_mut(xs, ys);
+                    let image::Rgb(data) = img.get_pixel(x, y); // Get RGB value of img
+
+                    *pixel = image::Rgb([data[0], data[1], data[2]]);  // Set pixel to RGB value
+                }
             }
         }
+    }
+
+    else {
+        panic!("Scale type not supported or not specified!")
     }
 
     Ok(rescaled_img)

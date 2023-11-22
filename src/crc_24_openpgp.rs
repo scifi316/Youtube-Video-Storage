@@ -31,12 +31,12 @@ pub fn gen_img_crc(img: &ImageBuffer<Luma<u8>, Vec<u8>>) -> io::Result<ImageBuff
     let mut crc_img: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::new(width, height);
 
     for (x, y, pixel) in crc_img.enumerate_pixels_mut() {
-        *pixel = img.get_pixel(x, y).to_rgb();
+        *pixel = img.get_pixel(x, y).to_rgb();  // Copy image data to new image
     }
 
-    for x in 0..img.width() {
-        let crc = gen_col_crc24(img, x);
-        let pixel = crc_img.get_pixel_mut(x, height-1);
+    for x in 0..img.width() {   // Generate CRC for each column as a vector of bytes (u8)
+        let crc = gen_col_crc24(img, x);    // Generate CRC for column x
+        let pixel = crc_img.get_pixel_mut(x, height-1);   // Get pixel at last row of column x
 
         *pixel = image::Rgb([crc.as_ref().unwrap()[0], crc.as_ref().unwrap()[1], crc.as_ref().unwrap()[2]]);  // Set pixel to CRC value
         // *pixel = image::Rgb([0, 0, 0]);  // Set all pixels to black in RGB mode
