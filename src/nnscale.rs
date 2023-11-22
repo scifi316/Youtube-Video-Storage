@@ -1,4 +1,4 @@
-use image::{ImageBuffer, Luma};
+use image::{ImageBuffer, Luma, Rgb, Pixel, GenericImageView};
 use std::vec::Vec;
 use std::io::{self};
 
@@ -37,6 +37,23 @@ pub fn new_image(width: Option<u32>, height: Option<u32>, data: Vec<u8>) -> io::
     Ok(byte_img)
 }
 
-// pub fn rescale(scale: u32, data: Vec<u8>) {
+pub fn rescale(img: &ImageBuffer<Rgb<u8>, Vec<u8>>, scale: Option<u32>, scale_type: &str) -> io::Result<ImageBuffer<Rgb<u8>, Vec<u8>>>{
+    let (width, height) = img.dimensions();
+    let mut rescaled_img: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::new(width*scale.unwrap_or(8), height*scale.unwrap_or(8));
 
-// }
+    if scale_type == "nearest" {
+        for (x, y, pixel) in rescaled_img.enumerate_pixels_mut() {
+            *pixel = image::Rgb([0, 0, 0]);     // Set all pixels to black in RGB for now
+        }
+        let mut k = 0;
+        for x in k..(k+1)*scale.unwrap()-1 {
+            for y in k..(k+1)*scale.unwrap()-1 {
+                let pixel = rescaled_img.get_pixel_mut(x, y);
+
+                *pixel = img.get_pixel(x, y).to_rgb();
+            }
+        }
+    }
+
+    Ok(rescaled_img)
+}
