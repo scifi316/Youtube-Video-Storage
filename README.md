@@ -1,6 +1,11 @@
 
 # youtube_video_storage
 
+## Forewarnings
+This mainly highly experimental and not likely to be maintained, just a short project to test feasibility. So mainy things are likely to change or added/removed
+
+## What's this for?
+
 YouTube supports many video formats such as .MP4, .MOV, and .AVI just to name a few, all of which can be uploaded to the platform of any length without cost to the uploader.
 
 YouTube recommends that a standard 1920x1080 MP4 file that plays on the platform, has a bitrate at 10Mbp/s for framerates at 30FPS or lower, while higher framerates like 60FPS need 15Mbp/s to meet recommendations.
@@ -35,6 +40,23 @@ A later revision of the CRC may ultilize CRC-32, having the Alpha channel in an 
  - [https://github.com/mrhooray/crc-rs]
 
 ## Checklist
+
+Basic proof of concept as:
+ - [x] Grayscale image
+ - [x] Grayscale image scaler
+ - [ ] Grayscale image decoder
+ - [x] RGB image
+ - [ ] RGB image scaler
+ - [ ] RGB image decoder
+ - [x] CRC checked image(RGB only)
+
+Other features:
+ - [ ] Data overflow prevention
+ - [ ] Sequenced image of data
+ - [ ] Image to video generation
+ - [ ] FFmpeg sequencer
+ - [ ] Other scaling algos
+ - [ ] Some GUI integration through Rust
 
 <!-- Links & Images -->
 [Rust-lang.org]: https://www.rust-lang.org/static/images/rust-logo-blk.svg
