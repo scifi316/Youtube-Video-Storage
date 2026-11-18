@@ -67,11 +67,34 @@ Other features:
 [Rust-lang.org]: https://www.rust-lang.org/static/images/rust-logo-blk.svg
 [Rust-url]: https://www.rust-lang.org
 
+## Surviving lossy video compression
+
+YouTube re-encodes everything, so exact 0-255 pixel values do not survive. Frames can instead draw each symbol as one of 2, 4, 16 or 256 evenly spaced intensity levels (`--levels`); the decoder averages the centre of each scaled block and rounds to the nearest level. The header is always drawn black/white, and the per-column CRC row is only used at 256 levels (it can't survive quantization).
+
+`scripts/ffmpeg_roundtrip.py` measures this: it encodes random payloads, re-encodes them with ffmpeg (libx264/libx265 at fixed bitrates), decodes, and compares. Results at 1920x1080, every video frame new data, ECC 32, 8 frames per config (ok = frames recovered exactly):
+
+| Setup (gray unless noted)         | Bytes/frame | x264 8M | x264 3M | x265 8M | x265 3M |
+|-----------------------------------|:-----------:|:-------:|:-------:|:-------:|:-------:|
+| 256 levels, any block size        | 28-338 K    | 0/8     | 0/8     | 0/8     | 0/8     |
+| 16 levels, 4px blocks             | 56 K        | 8/8     | 0/8     | 1/8     | 0/8     |
+| 4 levels, 8px blocks              | 7 K         | 8/8     | 8/8     | 8/8     | 8/8     |
+| 4 levels, 4px blocks              | 28 K        | 8/8     | 8/8     | 8/8     | 1/8     |
+| **2 levels, 4px blocks**          | **14 K**    | 8/8     | 8/8     | 8/8     | 8/8     |
+| 2 levels, 2px blocks              | 57 K        | 6/8     | 6/8     | -       | 2/8     |
+| RGB, 2 levels, 4px blocks         | 42 K        | 8/8     | 8/8     | 8/8     | 2/8     |
+| RGB, 2 levels, 8px blocks         | 10 K        | 8/8     | 8/8     | 8/8     | 8/8     |
+
+Takeaways: lossless 256-level frames never survive; 2 levels with 4px blocks is the best setting that passed every codec tested (even at 1 Mbit/s), and is available as `--youtube`. RGB triples the capacity but chroma is compressed harder, so it only holds with H.264 or large blocks. 2px blocks fail, mostly through the header, and more ECC doesn't rescue them. These are local ffmpeg tests, not YouTube itself, whose encoder settings are unknown; try a real upload before trusting a setting.
+
 ## Usage
 
 ```
-cargo run -- encode input.txt frame.png [--rgb] [--size WxH] [--scale N] [--ecc N]
+cargo run -- encode input.txt frame.png [--rgb] [--size WxH] [--scale N] [--ecc N] [--levels L] [--youtube]
 cargo run -- decode frame.png output.txt [--scale N]
+
+# for video that will be re-encoded (1920x1080 frame, ~14 KB each):
+cargo run -- encode input.bin frame.png --youtube
+cargo run -- decode frame.png output.bin --scale 4
 ```
 
-Frame layout: 25-pixel RS-protected header (magic, mode, ecc, payload length, payload CRC-32), interleaved RS payload (1 byte/pixel grayscale, 3 bytes/pixel RGB), and a per-column CRC-24 in the last row. Encoding fails rather than truncating if the data does not fit.
+Frame layout: 208-pixel RS-protected header drawn in black/white (magic, mode, ecc, bits per symbol, payload length, payload CRC-32), interleaved RS payload (1 byte/pixel grayscale, 3 bytes/pixel RGB), and a per-column CRC-24 in the last row. Encoding fails rather than truncating if the data does not fit.
