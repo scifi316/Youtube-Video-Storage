@@ -16,6 +16,10 @@ pub enum Error {
     ColumnCrc(Vec<u32>),
     /// Payload CRC-32 mismatch (data recovered but does not match what was stored).
     PayloadCrc { expected: u32, actual: u32 },
+    /// A Reed-Solomon block had more damage than its parity can repair.
+    Uncorrectable { block: usize },
+    /// Invalid encoding parameter (e.g. ECC size).
+    InvalidParameter(String),
     /// Unknown scaling algorithm or invalid scale factor.
     Scale(String),
 }
@@ -36,6 +40,10 @@ impl fmt::Display for Error {
             Error::PayloadCrc { expected, actual } => {
                 write!(f, "payload CRC-32 mismatch: expected {expected:08X}, got {actual:08X}")
             }
+            Error::Uncorrectable { block } => {
+                write!(f, "too much damage: Reed-Solomon block {block} could not be corrected")
+            }
+            Error::InvalidParameter(m) => write!(f, "invalid parameter: {m}"),
             Error::Scale(m) => write!(f, "scaling error: {m}"),
         }
     }

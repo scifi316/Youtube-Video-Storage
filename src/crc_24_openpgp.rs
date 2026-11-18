@@ -1,6 +1,5 @@
 // Per-column CRC-24/OPENPGP for RGB frames. The CRC of every column (all rows except the
 // last) is stored as an RGB pixel in the last row of that column.
-use crate::error::Result;
 use crc::{Crc, CRC_24_OPENPGP};
 use image::{Rgb, RgbImage};
 
@@ -36,12 +35,3 @@ pub fn bad_columns(img: &RgbImage) -> Vec<u32> {
         .collect()
 }
 
-/// Convenience wrapper: Ok(()) if all columns verify.
-pub fn verify(img: &RgbImage) -> Result<()> {
-    let bad = bad_columns(img);
-    if bad.is_empty() {
-        Ok(())
-    } else {
-        Err(crate::error::Error::ColumnCrc(bad))
-    }
-}

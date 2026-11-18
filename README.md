@@ -29,7 +29,11 @@ YouTube supports such formats by allowing uploads in HEVC/H.265(an extension of 
 
 ## Using CRC
 
-CRC(Cyclc Redundancy Check) allows for verifying and help with troubleshooting corrupted information, its usage here is implemented in the form of CRC-24/OPENPGP. Each column's CRC is stored in the last row of the frame. CRC-24 *detects* corruption (and the decoder reports exactly which columns failed) but cannot correct it; error correction (e.g. Reed-Solomon) is future work.
+CRC(Cyclc Redundancy Check) allows for verifying and help with troubleshooting corrupted information, its usage here is implemented in the form of CRC-24/OPENPGP. Each column's CRC is stored in the last row of the frame. CRC-24 *detects* corruption and the decoder reports exactly which columns failed. Repair is done by Reed-Solomon (see below), which uses those bad-column reports as known erasure positions.
+
+## Reed-Solomon error correction
+
+The payload is split into blocks of `255 - ecc` bytes, each given `ecc` parity bytes (default 32, set with `--ecc`, `0` disables). A block repairs up to `ecc/2` bad bytes at unknown positions, or up to `ecc` bad bytes at known positions (columns that fail their CRC-24). Codewords are byte-interleaved across the frame so a damaged row, column or smear is spread thinly over many blocks. The header is also RS-protected (6 bad bytes repairable), and a payload CRC-32 gives the final verdict. Cost: with the default, about 12.5% of capacity.
 
 A later revision of the CRC may ultilize CRC-32, having the Alpha channel in an RGBA pixel store its signature as a [<u8>, <u8>, <u8>, <u8>] vector. The u32 from the CRC-32 will be modified in little-endian form.
 
@@ -52,6 +56,7 @@ Basic proof of concept as:
 
 Other features:
  - [x] Data overflow prevention
+ - [x] Reed-Solomon error correction
  - [ ] Sequenced image of data
  - [ ] Image to video generation
  - [ ] FFmpeg sequencer
@@ -65,8 +70,8 @@ Other features:
 ## Usage
 
 ```
-cargo run -- encode input.txt frame.png [--rgb] [--size WxH] [--scale N]
+cargo run -- encode input.txt frame.png [--rgb] [--size WxH] [--scale N] [--ecc N]
 cargo run -- decode frame.png output.txt [--scale N]
 ```
 
-Frame layout: 12-pixel header (magic, mode, payload length, payload CRC-32), payload (1 byte/pixel grayscale, 3 bytes/pixel RGB), and a per-column CRC-24 in the last row. Encoding fails rather than truncating if the data does not fit.
+Frame layout: 25-pixel RS-protected header (magic, mode, ecc, payload length, payload CRC-32), interleaved RS payload (1 byte/pixel grayscale, 3 bytes/pixel RGB), and a per-column CRC-24 in the last row. Encoding fails rather than truncating if the data does not fit.

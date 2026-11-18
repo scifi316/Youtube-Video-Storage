@@ -9,11 +9,12 @@ use std::fs;
 
 const USAGE: &str = "\
 Usage:
-  youtube_video_storage encode <input> <output.png> [--rgb] [--size WxH] [--scale N]
+  youtube_video_storage encode <input> <output.png> [--rgb] [--size WxH] [--scale N] [--ecc N]
   youtube_video_storage decode <input.png> <output> [--scale N]
 
 encode: stores <input> in a PNG frame (default: grayscale, 240x135, scale 1).
-        Fails if the data does not fit in the frame.
+        --ecc N sets Reed-Solomon parity bytes per 255-byte block (default 32,
+        repairs ~16 bad bytes per block; 0 disables). Fails if data does not fit.
 decode: recovers the file; use the same --scale that was used to encode.
         Reports which columns failed their CRC check if the image is damaged.";
 
@@ -28,7 +29,7 @@ fn run(args: &[String]) -> Result<()> {
     let input = args.get(1).ok_or_else(|| bad("missing input"))?;
     let output = args.get(2).ok_or_else(|| bad("missing output"))?;
 
-    let (mut mode, mut size, mut scale) = (Mode::Gray, (240, 135), 1u32);
+    let (mut mode, mut size, mut scale, mut ecc) = (Mode::Gray, (240, 135), 1u32, frame::DEFAULT_ECC);
     let mut opts = args[3..].iter();
     while let Some(opt) = opts.next() {
         match opt.as_str() {
@@ -39,6 +40,9 @@ fn run(args: &[String]) -> Result<()> {
             "--scale" => {
                 scale = opts.next().and_then(|s| s.parse().ok()).ok_or_else(|| bad("--scale needs a number"))?
             }
+            "--ecc" => {
+                ecc = opts.next().and_then(|s| s.parse().ok()).ok_or_else(|| bad("--ecc needs a number 0-200"))?
+            }
             other => return Err(bad(&format!("unknown option '{other}'"))),
         }
     }
@@ -46,7 +50,7 @@ fn run(args: &[String]) -> Result<()> {
     match cmd.as_str() {
         "encode" => {
             let data = fs::read(input)?;
-            let mut img = frame::encode(&data, size.0, size.1, mode)?;
+            let mut img = frame::encode(&data, size.0, size.1, mode, ecc)?;
             if scale > 1 {
                 img = nnscale::rescale(&img, Some(scale), "nearest")?;
             }
@@ -58,9 +62,12 @@ fn run(args: &[String]) -> Result<()> {
             if scale > 1 {
                 img = nnscale::downscale(&img, scale)?;
             }
-            let data = frame::decode(&img)?;
-            fs::write(output, &data)?;
-            println!("Decoded {} bytes to {output}", data.len());
+            let d = frame::decode_report(&img)?;
+            fs::write(output, &d.data)?;
+            println!(
+                "Decoded {} bytes to {output} ({} byte(s) repaired, {} damaged column(s))",
+                d.data.len(), d.corrected_bytes, d.bad_columns.len()
+            );
         }
         other => return Err(bad(&format!("unknown command '{other}'"))),
     }
