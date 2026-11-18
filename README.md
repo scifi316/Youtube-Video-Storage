@@ -57,9 +57,9 @@ Basic proof of concept as:
 Other features:
  - [x] Data overflow prevention
  - [x] Reed-Solomon error correction
- - [ ] Sequenced image of data
- - [ ] Image to video generation
- - [ ] FFmpeg sequencer
+ - [x] Sequenced image of data
+ - [x] Image to video generation
+ - [x] FFmpeg sequencer
  - [ ] Other scaling algos
  - [ ] Some GUI integration through Rust
 
@@ -86,13 +86,23 @@ YouTube re-encodes everything, so exact 0-255 pixel values do not survive. Frame
 
 Takeaways: lossless 256-level frames never survive; 2 levels with 4px blocks is the best setting that passed every codec tested (even at 1 Mbit/s), and is available as `--youtube`. RGB triples the capacity but chroma is compressed harder, so it only holds with H.264 or large blocks. 2px blocks fail, mostly through the header, and more ECC doesn't rescue them. These are local ffmpeg tests, not YouTube itself, whose encoder settings are unknown; try a real upload before trusting a setting.
 
+## Large files and video
+
+`encode-video` splits a file across numbered frames. Each frame carries a small chunk header (frame index, total frames, file length, file CRC-32) inside its Reed-Solomon protected payload, so frames can arrive in any order, repeated frames are ignored, a missing or unreadable frame is reported by number, and the reassembled file is verified end to end. The block size is auto-detected when decoding. `--hold N` shows every frame N times in the video so the decoder can fall back on another copy. ffmpeg turns the frames into an H.264/H.265 MP4.
+
+Throughput is limited by the video bitrate: the default preset carries ~14 KB per frame, about 3.4 Mbit/s at 30 fps of incompressible data, and the compressor has to pass all of it through. Measured with 22 random frames: x264 round-tripped at 3 Mbit/s and up; x265 (`fast` preset) failed on the later frames below 8 Mbit/s even with `--hold 2`. The default is x264 at 8M (YouTube recommends 10 Mbit/s for 1080p30). A video whose frames can't all be recovered fails with the list of missing frame numbers. There is no cross-frame parity yet, so one lost frame loses the file.
+
 ## Usage
 
 ```
 cargo run -- encode input.txt frame.png [--rgb] [--size WxH] [--scale N] [--ecc N] [--levels L] [--youtube]
 cargo run -- decode frame.png output.txt [--scale N]
 
-# for video that will be re-encoded (1920x1080 frame, ~14 KB each):
+# a whole file as a video (needs ffmpeg on PATH); the --youtube preset is the default:
+cargo run --release -- encode-video bigfile.zip data.mp4 [--codec x264|x265] [--bitrate 8M] [--hold 2]
+cargo run --release -- decode-video data.mp4 bigfile.zip
+
+# a single frame meant for lossy video (1920x1080 frame, ~14 KB):
 cargo run -- encode input.bin frame.png --youtube
 cargo run -- decode frame.png output.bin --scale 4
 ```

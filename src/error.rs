@@ -20,6 +20,12 @@ pub enum Error {
     Uncorrectable { block: usize },
     /// Invalid encoding parameter (e.g. ECC size).
     InvalidParameter(String),
+    /// Frames of a multi-frame file are missing (indices, zero-based).
+    MissingFrames { missing: Vec<u32>, total: u32 },
+    /// Frames that don't belong to the same file, or are internally inconsistent.
+    Inconsistent(String),
+    /// An external program (ffmpeg) failed or is not installed.
+    External(String),
     /// Unknown scaling algorithm or invalid scale factor.
     Scale(String),
 }
@@ -44,6 +50,11 @@ impl fmt::Display for Error {
                 write!(f, "too much damage: Reed-Solomon block {block} could not be corrected")
             }
             Error::InvalidParameter(m) => write!(f, "invalid parameter: {m}"),
+            Error::MissingFrames { missing, total } => {
+                write!(f, "{} of {total} frame(s) missing or unreadable: {:?}", missing.len(), missing)
+            }
+            Error::Inconsistent(m) => write!(f, "inconsistent frames: {m}"),
+            Error::External(m) => write!(f, "{m}"),
             Error::Scale(m) => write!(f, "scaling error: {m}"),
         }
     }

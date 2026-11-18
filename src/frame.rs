@@ -20,6 +20,7 @@
 //   * The payload CRC-32 is the final check on the recovered data.
 use crate::crc_24_openpgp;
 use crate::error::{Error, Result};
+use crate::nnscale::downscale;
 use crc::{Crc, CRC_32_ISO_HDLC};
 use image::{Rgb, RgbImage};
 use reed_solomon::{Decoder, Encoder};
@@ -270,15 +271,20 @@ pub fn decode(img: &RgbImage) -> Result<Vec<u8>> {
     decode_report(img).map(|d| d.data)
 }
 
-/// Decode a frame produced by `encode`, repairing damage where possible.
-pub fn decode_report(img: &RgbImage) -> Result<Decoded> {
+struct Header {
+    p: Params,
+    len: usize,
+    expected: u32,
+    corrected: usize,
+}
+
+/// Read and validate just the (Reed-Solomon protected) header of a frame.
+fn parse_header(img: &RgbImage) -> Result<Header> {
     let (width, height) = img.dimensions();
     if (width as usize) * (height as usize) < HEADER_PIXELS {
         return Err(Error::BadDimensions(format!("{width}x{height} is too small for a frame")));
     }
-    let mut corrected_bytes = 0;
-
-    // Header: 1 bit per pixel, thresholded at mid-grey.
+    // 1 bit per pixel, thresholded at mid-grey.
     let mut header_raw = vec![0u8; HEADER_BYTES];
     for (i, px) in img.pixels().take(HEADER_PIXELS).enumerate() {
         let luma = (px.0[0] as u32 + px.0[1] as u32 + px.0[2] as u32) / 3;
@@ -286,9 +292,8 @@ pub fn decode_report(img: &RgbImage) -> Result<Decoded> {
             header_raw[i / 8] |= 0x80 >> (i % 8);
         }
     }
-    let (hdr, n) = rs_correct(&Decoder::new(HEADER_ECC), &header_raw, &[])
+    let (hdr, corrected) = rs_correct(&Decoder::new(HEADER_ECC), &header_raw, &[])
         .ok_or_else(|| Error::BadHeader("header is damaged beyond repair or not a frame".into()))?;
-    corrected_bytes += n;
     if hdr[..3] != MAGIC {
         return Err(Error::BadHeader("magic bytes not found".into()));
     }
@@ -296,13 +301,32 @@ pub fn decode_report(img: &RgbImage) -> Result<Decoded> {
         .ok_or_else(|| Error::BadHeader(format!("unknown mode {}", hdr[3])))?;
     let p = Params { mode, ecc: hdr[4], bits: hdr[5] };
     p.validate().map_err(|e| Error::BadHeader(e.to_string()))?;
-    let ecc = p.ecc;
     let len = u32::from_le_bytes(hdr[6..10].try_into().unwrap()) as usize;
     let expected = u32::from_le_bytes(hdr[10..14].try_into().unwrap());
     let cap = capacity(width, height, &p).map_err(|e| Error::BadHeader(e.to_string()))?;
     if len > cap {
         return Err(Error::BadHeader(format!("length {len} exceeds capacity {cap}")));
     }
+    Ok(Header { p, len, expected, corrected })
+}
+
+/// Find the integer scale factor at which `img` (an upscaled frame) holds a valid frame header.
+/// Returns 1 for an unscaled frame.
+pub fn detect_scale(img: &RgbImage) -> Option<u32> {
+    let (w, h) = img.dimensions();
+    (1..=32u32)
+        .filter(|s| w % s == 0 && h % s == 0)
+        .find(|&s| match downscale(img, s) {
+            Ok(small) => parse_header(&small).is_ok(),
+            Err(_) => false,
+        })
+}
+
+/// Decode a frame produced by `encode`, repairing damage where possible.
+pub fn decode_report(img: &RgbImage) -> Result<Decoded> {
+    let width = img.width();
+    let Header { p, len, expected, corrected: mut corrected_bytes } = parse_header(img)?;
+    let (mode, ecc) = (p.mode, p.ecc);
 
     let bad_columns = if p.has_crc_row() { crc_24_openpgp::bad_columns(img) } else { Vec::new() };
     let is_bad = |pixel_idx: usize| bad_columns.binary_search(&(pixel_idx as u32 % width)).is_ok();
@@ -373,7 +397,7 @@ pub fn decode_report(img: &RgbImage) -> Result<Decoded> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::nnscale::{downscale, rescale};
+    use crate::nnscale::rescale;
 
     const ECC: u8 = DEFAULT_ECC;
 
