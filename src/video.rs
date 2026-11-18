@@ -1,5 +1,5 @@
 // Turn a file into a video of numbered data frames, and back, using the ffmpeg command line.
-use crate::container::{self, Added, Joiner};
+use crate::container::{self, Added, Joiner, Redundancy};
 use crate::error::{Error, Result};
 use crate::frame::{self, Params};
 use crate::nnscale::{downscale, rescale};
@@ -27,6 +27,8 @@ pub struct VideoOpts {
     /// Each frame is shown this many video frames in a row. Extra copies give the decoder more
     /// chances to read a frame the compressor mangled (at the cost of throughput).
     pub hold: u32,
+    /// Parity frames added per group of data frames.
+    pub redundancy: Redundancy,
 }
 
 #[derive(Debug, Default)]
@@ -37,6 +39,8 @@ pub struct DecodeStats {
     pub unreadable: usize,
     pub scale: u32,
     pub corrected_bytes: usize,
+    /// Frames that were lost or unreadable but rebuilt from parity.
+    pub recovered_frames: usize,
 }
 
 /// Temp directory removed on drop.
@@ -77,10 +81,10 @@ fn ffmpeg(args: &[OsString]) -> Result<()> {
 
 /// Number of video frames the data will need (before `hold` repetition).
 pub fn plan(len: usize, o: &VideoOpts) -> Result<usize> {
-    container::frames_needed(len, o.size.0, o.size.1, &o.params)
+    container::frames_needed(len, o.size.0, o.size.1, &o.params, o.redundancy)
 }
 
-/// Encode `data` into a video file. Returns the number of distinct data frames.
+/// Encode `data` into a video file. Returns the number of distinct frames (data plus parity).
 pub fn encode_video(data: &[u8], out: &Path, o: &VideoOpts) -> Result<usize> {
     if o.fps == 0 || o.hold == 0 || o.scale == 0 {
         return Err(Error::InvalidParameter("fps, hold and scale must be at least 1".into()));
@@ -91,7 +95,7 @@ pub fn encode_video(data: &[u8], out: &Path, o: &VideoOpts) -> Result<usize> {
     }
     let tmp = TempDir::new()?;
     let mut count = 0;
-    for (i, frame) in container::split(data, o.size.0, o.size.1, &o.params)?.enumerate() {
+    for (i, frame) in container::split(data, o.size.0, o.size.1, &o.params, o.redundancy)?.enumerate() {
         let img = rescale(&frame?, Some(o.scale), "nearest")?;
         img.save(tmp.0.join(format!("f_{:06}.png", i + 1)))?;
         count += 1;
@@ -156,7 +160,9 @@ pub fn decode_video(video: &Path, scale: Option<u32>) -> Result<(Vec<u8>, Decode
         }
     }
     stats.corrected_bytes = joiner.corrected_bytes;
-    match joiner.finish() {
+    let result = joiner.finish();
+    stats.recovered_frames = joiner.recovered_frames;
+    match result {
         Ok(data) => Ok((data, stats)),
         Err(Error::Inconsistent(m)) if m.starts_with("no valid") => Err(match last_err {
             Some(e) => e,
@@ -188,6 +194,7 @@ mod tests {
             bitrate: "8M".into(),
             fps: 30,
             hold,
+            redundancy: Redundancy::NONE,
         }
     }
 
@@ -234,5 +241,34 @@ mod tests {
             Err(Error::MissingFrames { missing, .. }) => assert!(!missing.is_empty()),
             other => panic!("expected MissingFrames, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn lost_frame_in_video_is_rebuilt_from_parity() {
+        if !have_x264() {
+            return;
+        }
+        let data: Vec<u8> = (0..60_000u32).map(|i| (i.wrapping_mul(2654435761) >> 9) as u8).collect();
+        let dir = TempDir::new().unwrap();
+        let mut o = opts(1);
+        o.redundancy = Redundancy { group: 4, parity: 1 };
+        let full = dir.0.join("full.mp4");
+        let frames = encode_video(&data, &full, &o).unwrap();
+        assert!(frames >= 6);
+
+        // Drop video frame 1 (a data frame) by re-muxing without it.
+        let cut = dir.0.join("cut.mp4");
+        let ok = Command::new("ffmpeg")
+            .args(["-y", "-loglevel", "error", "-i"])
+            .arg(&full)
+            .args(["-vf", "select=not(eq(n\\,1))", "-fps_mode", "passthrough", "-c:v", "libx264", "-b:v", "8M"])
+            .arg(&cut)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok);
+        let (out, stats) = decode_video(&cut, None).unwrap();
+        assert_eq!(out, data);
+        assert_eq!(stats.recovered_frames, 1);
     }
 }

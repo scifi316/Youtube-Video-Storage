@@ -90,7 +90,11 @@ Takeaways: lossless 256-level frames never survive; 2 levels with 4px blocks is 
 
 `encode-video` splits a file across numbered frames. Each frame carries a small chunk header (frame index, total frames, file length, file CRC-32) inside its Reed-Solomon protected payload, so frames can arrive in any order, repeated frames are ignored, a missing or unreadable frame is reported by number, and the reassembled file is verified end to end. The block size is auto-detected when decoding. `--hold N` shows every frame N times in the video so the decoder can fall back on another copy. ffmpeg turns the frames into an H.264/H.265 MP4.
 
-Throughput is limited by the video bitrate: the default preset carries ~14 KB per frame, about 3.4 Mbit/s at 30 fps of incompressible data, and the compressor has to pass all of it through. Measured with 22 random frames: x264 round-tripped at 3 Mbit/s and up; x265 (`fast` preset) failed on the later frames below 8 Mbit/s even with `--hold 2`. The default is x264 at 8M (YouTube recommends 10 Mbit/s for 1080p30). A video whose frames can't all be recovered fails with the list of missing frame numbers. There is no cross-frame parity yet, so one lost frame loses the file.
+Throughput is limited by the video bitrate: the default preset carries ~14 KB per frame, about 3.4 Mbit/s at 30 fps of incompressible data, and the compressor has to pass all of it through. Measured with 22 random frames: x264 round-tripped at 3 Mbit/s and up; x265 (`fast` preset) failed on the later frames below 8 Mbit/s even with `--hold 2`. The default is x264 at 8M (YouTube recommends 10 Mbit/s for 1080p30). A video whose frames can't all be recovered fails with the list of missing frame numbers. 
+
+### Parity frames
+
+Frames are grouped: every `--group G` data frames (default 10) are followed by `--parity P` parity frames (default 1). The parity frames are Reed-Solomon codewords taken across the group (byte *j* of every frame is one codeword), so any P lost or unreadable frames in a group are rebuilt exactly, whichever frames they are. The default costs 10% extra frames and survives one lost frame per ten; raise `--parity` if the video may be cut or damaged more heavily, or use `--parity 0` to turn it off. If a group loses more than P frames, decoding fails with the list of unrecoverable frame numbers. The last group may be shorter and still gets its full parity. Checked by dropping frames out of a re-encoded video: two lost frames in different groups were rebuilt, two in the same group were reported as missing.
 
 ## Usage
 
@@ -99,7 +103,7 @@ cargo run -- encode input.txt frame.png [--rgb] [--size WxH] [--scale N] [--ecc 
 cargo run -- decode frame.png output.txt [--scale N]
 
 # a whole file as a video (needs ffmpeg on PATH); the --youtube preset is the default:
-cargo run --release -- encode-video bigfile.zip data.mp4 [--codec x264|x265] [--bitrate 8M] [--hold 2]
+cargo run --release -- encode-video bigfile.zip data.mp4 [--codec x264|x265] [--bitrate 8M] [--hold 2] [--group 10 --parity 1]
 cargo run --release -- decode-video data.mp4 bigfile.zip
 
 # a single frame meant for lossy video (1920x1080 frame, ~14 KB):
