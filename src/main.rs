@@ -1,57 +1,76 @@
-// Parse text file into byte stream
-use std::fs::File;
-use std::io::{self, Read};
-
-mod nnscale;
 mod crc_24_openpgp;
+mod error;
+mod frame;
+mod nnscale;
 
-// Read file into a vector of bytes
-fn read_file_vec8(file_path: &str) -> io::Result<Vec<u8>> {
-    let mut file = File::open(file_path)?;
-    let mut content = Vec::new();
+use error::{Error, Result};
+use frame::Mode;
+use std::fs;
 
-    file.read_to_end(&mut content)?;
+const USAGE: &str = "\
+Usage:
+  youtube_video_storage encode <input> <output.png> [--rgb] [--size WxH] [--scale N]
+  youtube_video_storage decode <input.png> <output> [--scale N]
 
-    Ok(content)
+encode: stores <input> in a PNG frame (default: grayscale, 240x135, scale 1).
+        Fails if the data does not fit in the frame.
+decode: recovers the file; use the same --scale that was used to encode.
+        Reports which columns failed their CRC check if the image is damaged.";
+
+fn parse_size(s: &str) -> Option<(u32, u32)> {
+    let (w, h) = s.split_once('x')?;
+    Some((w.parse().ok()?, h.parse().ok()?))
 }
 
-// Read file into a string
-// fn read_file_str(file_path: &str) -> io::Result<String> {
-//     let mut file = File::open(file_path)?;
-//     let mut content = String::new();
+fn run(args: &[String]) -> Result<()> {
+    let bad = |m: &str| Error::BadDimensions(format!("{m}\n\n{USAGE}"));
+    let cmd = args.first().ok_or_else(|| bad("missing command"))?;
+    let input = args.get(1).ok_or_else(|| bad("missing input"))?;
+    let output = args.get(2).ok_or_else(|| bad("missing output"))?;
 
-//     file.read_to_string(&mut content)?;
-//     file.read_to_string(&mut content)?;
+    let (mut mode, mut size, mut scale) = (Mode::Gray, (240, 135), 1u32);
+    let mut opts = args[3..].iter();
+    while let Some(opt) = opts.next() {
+        match opt.as_str() {
+            "--rgb" => mode = Mode::Rgb,
+            "--size" => {
+                size = opts.next().and_then(|s| parse_size(s)).ok_or_else(|| bad("--size needs WxH"))?
+            }
+            "--scale" => {
+                scale = opts.next().and_then(|s| s.parse().ok()).ok_or_else(|| bad("--scale needs a number"))?
+            }
+            other => return Err(bad(&format!("unknown option '{other}'"))),
+        }
+    }
 
-//     Ok(content)
-// }
-
-fn main() -> io::Result<()> {
-    let file_path = "input.txt";
-    
-    let content_vec8 = read_file_vec8(file_path)?;
-    //let content_str = read_file_str(file_path)?;
-
-    // for byte in &content_vec8 {
-    //     print!("{:X?} ", byte);
-    // }
-
-    //println!("\nText content: {}", content_str);
-
-    let (width, height, scale) = (240, 135, 8);
-
-    let img = nnscale::new_image(Some(width), Some(height), content_vec8)?.clone();
-    let _ = &img.save("output.png").unwrap();
-    
-    let crc = crc_24_openpgp::gen_col_crc24(&img, 0);
-    println!("CRC: {:X?}", crc);
-
-    let crc_img = crc_24_openpgp::gen_img_crc(&img)?.clone();
-    let _ = &crc_img.save("output_crc.png").unwrap();
-
-    let scaled_image = nnscale::rescale(&crc_img, Some(scale), "nearest");
-    let file_name = format!("output_crc_rescaled_{:?}x{:?}.png", width*scale, height*scale);
-    let _ = &scaled_image?.save(file_name).unwrap();
-
+    match cmd.as_str() {
+        "encode" => {
+            let data = fs::read(input)?;
+            let mut img = frame::encode(&data, size.0, size.1, mode)?;
+            if scale > 1 {
+                img = nnscale::rescale(&img, Some(scale), "nearest")?;
+            }
+            img.save(output)?;
+            println!("Encoded {} bytes into {output} ({}x{})", data.len(), img.width(), img.height());
+        }
+        "decode" => {
+            let mut img = image::open(input)?.to_rgb8();
+            if scale > 1 {
+                img = nnscale::downscale(&img, scale)?;
+            }
+            let data = frame::decode(&img)?;
+            fs::write(output, &data)?;
+            println!("Decoded {} bytes to {output}", data.len());
+        }
+        other => return Err(bad(&format!("unknown command '{other}'"))),
+    }
     Ok(())
+}
+
+fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Err(e) = run(&args) {
+        eprintln!("error: {e}");
+        std::process::exit(1);
+    }
 }

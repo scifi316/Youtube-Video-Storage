@@ -1,7 +1,5 @@
 /target
 /.vscode
-output_crc*.png
 /src/main.exe
-Cargo.lock
 /.github
-/src/cxx
+/src/cxxoutput*.png

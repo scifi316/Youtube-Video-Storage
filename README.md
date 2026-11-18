@@ -29,7 +29,7 @@ YouTube supports such formats by allowing uploads in HEVC/H.265(an extension of 
 
 ## Using CRC
 
-CRC(Cyclc Redundancy Check) allows for verifying and help with troubleshooting corrupted information, its usage here is implemented in the form of CRC-24/OPENPGP. This implementation has a hamming distance of 6, this allows for about 1.5 pixels in a column to be corrupted or invalid, and with the right check, be allowed to be resolved later in verification.
+CRC(Cyclc Redundancy Check) allows for verifying and help with troubleshooting corrupted information, its usage here is implemented in the form of CRC-24/OPENPGP. Each column's CRC is stored in the last row of the frame. CRC-24 *detects* corruption (and the decoder reports exactly which columns failed) but cannot correct it; error correction (e.g. Reed-Solomon) is future work.
 
 A later revision of the CRC may ultilize CRC-32, having the Alpha channel in an RGBA pixel store its signature as a [<u8>, <u8>, <u8>, <u8>] vector. The u32 from the CRC-32 will be modified in little-endian form.
 
@@ -44,14 +44,14 @@ A later revision of the CRC may ultilize CRC-32, having the Alpha channel in an 
 Basic proof of concept as:
  - [x] Grayscale image
  - [x] Grayscale image scaler
- - [ ] Grayscale image decoder
+ - [x] Grayscale image decoder
  - [x] RGB image
- - [ ] RGB image scaler
- - [ ] RGB image decoder
+ - [x] RGB image scaler
+ - [x] RGB image decoder
  - [x] CRC checked image(RGB only)
 
 Other features:
- - [ ] Data overflow prevention
+ - [x] Data overflow prevention
  - [ ] Sequenced image of data
  - [ ] Image to video generation
  - [ ] FFmpeg sequencer
@@ -61,3 +61,12 @@ Other features:
 <!-- Links & Images -->
 [Rust-lang.org]: https://www.rust-lang.org/static/images/rust-logo-blk.svg
 [Rust-url]: https://www.rust-lang.org
+
+## Usage
+
+```
+cargo run -- encode input.txt frame.png [--rgb] [--size WxH] [--scale N]
+cargo run -- decode frame.png output.txt [--scale N]
+```
+
+Frame layout: 12-pixel header (magic, mode, payload length, payload CRC-32), payload (1 byte/pixel grayscale, 3 bytes/pixel RGB), and a per-column CRC-24 in the last row. Encoding fails rather than truncating if the data does not fit.

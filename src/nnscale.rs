@@ -1,64 +1,54 @@
-use image::{ImageBuffer, Luma, Rgb};
-use std::vec::Vec;
-use std::io::{self};
+// Scaling of RGB frames. `rescale` enlarges by an integer factor (nearest neighbor);
+// `downscale` reverses it by averaging the centre of each block, which tolerates
+// small amounts of noise (e.g. from lossy video compression).
+use crate::error::{Error, Result};
+use image::{Rgb, RgbImage};
 
-pub fn new_image(width: Option<u32>, height: Option<u32>, data: Vec<u8>) -> io::Result<ImageBuffer<Luma<u8>, Vec<u8>>>{
-    let mut byte_img = ImageBuffer::new(width.unwrap_or(240), height.unwrap_or(135)); // Default image size is 240x135
-
-    for (_x, _y, pixel) in byte_img.enumerate_pixels_mut() {
-        *pixel = image::Luma([0]);
-        // *pixel = image::Rgb([0, 0, 0]);  // Set all pixels to black in RGB mode
+pub fn rescale(img: &RgbImage, scale: Option<u32>, scale_type: &str) -> Result<RgbImage> {
+    let scale = scale.unwrap_or(8);
+    if scale == 0 {
+        return Err(Error::Scale("scale factor must be at least 1".into()));
     }
-
-    for y in 0..height.unwrap() {    // Run through image, set each pixel as the contents of the vector(data)
-        for x in 0..width.unwrap() {
-            let pixel = byte_img.get_pixel_mut(x, y);
-            // let image::Rgb(data) = *pixel;
-            let index = match width {
-                Some(w) => (y * w) + x,
-                None => {
-                    240 // Default width
-                }
-            };
-
-            if index < data.len().try_into().unwrap() {    // RGB values are set as the decimal values of the vector being read for every other RGB position as to not have a repeat of colors.
-                *pixel = image::Luma([data[(y as usize * width.unwrap() as usize) + x as usize]]);
-            }
-            else {
-                *pixel = image::Luma([0]);
-            }
-        }
+    if scale_type != "nearest" {
+        return Err(Error::Scale(format!("unsupported scale type '{scale_type}'")));
     }
-
-    Ok(byte_img)
+    let (w, h) = img.dimensions();
+    let (nw, nh) = match (w.checked_mul(scale), h.checked_mul(scale)) {
+        (Some(a), Some(b)) => (a, b),
+        _ => return Err(Error::Scale("scaled dimensions overflow".into())),
+    };
+    let mut out = RgbImage::new(nw, nh);
+    for (x, y, pixel) in out.enumerate_pixels_mut() {
+        *pixel = *img.get_pixel(x / scale, y / scale);
+    }
+    Ok(out)
 }
 
-pub fn rescale(img: &ImageBuffer<Rgb<u8>, Vec<u8>>, scale: Option<u32>, scale_type: &str) -> io::Result<ImageBuffer<Rgb<u8>, Vec<u8>>>{
-    let (width, height) = img.dimensions();
-    let mut rescaled_img: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::new(width*scale.unwrap_or(8), height*scale.unwrap_or(8));
-
-    // TO-DO: Implement other scaling types
-    // TO-DO: Clean up/optimize nearest neighbor scaling algorithm
-    if scale_type == "nearest" {
-        for (_x, _y, pixel) in rescaled_img.enumerate_pixels_mut() {
-            *pixel = image::Rgb([0, 0, 0]);     // Set all pixels to black in RGB for now
-        }
-
-        for (x, y, _pixel_img) in img.enumerate_pixels() {  // Run through image, set each pixel as the contents of the vector(data)
-            for xs in x*scale.unwrap()..(x+1)*scale.unwrap() {
-                for ys in y*scale.unwrap()..(y+1)*scale.unwrap() {
-                    let pixel = rescaled_img.get_pixel_mut(xs, ys);
-                    let image::Rgb(data) = img.get_pixel(x, y); // Get RGB value of img
-
-                    *pixel = image::Rgb([data[0], data[1], data[2]]);  // Set pixel to RGB value
+pub fn downscale(img: &RgbImage, scale: u32) -> Result<RgbImage> {
+    if scale == 0 {
+        return Err(Error::Scale("scale factor must be at least 1".into()));
+    }
+    let (w, h) = img.dimensions();
+    if w % scale != 0 || h % scale != 0 {
+        return Err(Error::BadDimensions(format!(
+            "{w}x{h} is not divisible by scale {scale}"
+        )));
+    }
+    let margin = scale / 4; // ignore block edges, where compression bleeds colours
+    let (lo, hi) = (margin, scale - margin);
+    let n = ((hi - lo) * (hi - lo)) as u32;
+    let mut out = RgbImage::new(w / scale, h / scale);
+    for (x, y, pixel) in out.enumerate_pixels_mut() {
+        let mut sum = [0u32; 3];
+        for dy in lo..hi {
+            for dx in lo..hi {
+                let p = img.get_pixel(x * scale + dx, y * scale + dy);
+                for c in 0..3 {
+                    sum[c] += p.0[c] as u32;
                 }
             }
         }
+        *pixel = Rgb([0, 1, 2].map(|c| ((sum[c] + n / 2) / n) as u8));
     }
-
-    else {
-        panic!("Scale type not supported or not specified!")
-    }
-
-    Ok(rescaled_img)
+    Ok(out)
 }
