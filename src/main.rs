@@ -10,7 +10,7 @@ use frame::{Mode, Params};
 use std::fs;
 use std::path::Path;
 use container::Redundancy;
-use video::{Codec, VideoOpts};
+use video::{Codec, Rate, VideoOpts};
 
 const USAGE: &str = "\
 Usage:
@@ -29,7 +29,7 @@ Frame options:
   --youtube           preset for lossy video: gray, 2 levels, 480x270 at scale 4 (1920x1080,
                       ~14 KB per frame). Later options override it.
 Video options (encode-video):
-  --codec x264|x265   (default x264)     --bitrate 8M     --fps 30
+  --codec x264|x265   (default x264)     --crf 23 | --bitrate 8M   --fps 30
   --hold N            show every frame N times so a damaged copy can be replaced (default 1)
   --group G --parity P  add P parity frames per G data frames (default 10 and 1); any P lost
                       frames per group are rebuilt. --parity 0 turns it off
@@ -42,7 +42,7 @@ struct Opts {
     size: (u32, u32),
     scale: Option<u32>,
     codec: Codec,
-    bitrate: String,
+    rate: Rate,
     fps: u32,
     hold: u32,
     red: Redundancy,
@@ -63,7 +63,7 @@ fn parse_opts(args: &[String], youtube_default: bool) -> Result<Opts> {
         size: (240, 135),
         scale: None,
         codec: Codec::X264,
-        bitrate: "8M".into(),
+        rate: Rate::Crf(23),
         fps: 30,
         hold: 1,
         red: Redundancy { group: 10, parity: 1 },
@@ -90,7 +90,8 @@ fn parse_opts(args: &[String], youtube_default: bool) -> Result<Opts> {
             "--hold" => o.hold = value("a number")?.parse().map_err(|_| bad("--hold needs a number"))?,
             "--group" => o.red.group = value("a number")?.parse().map_err(|_| bad("--group needs a number 1-255"))?,
             "--parity" => o.red.parity = value("a number")?.parse().map_err(|_| bad("--parity needs a number"))?,
-            "--bitrate" => o.bitrate = value("a rate like 5M")?.clone(),
+            "--bitrate" => o.rate = Rate::Bitrate(value("a rate like 8M")?.clone()),
+            "--crf" => o.rate = Rate::Crf(value("a number 0-51")?.parse().map_err(|_| bad("--crf needs a number 0-51"))?),
             "--codec" => {
                 o.codec = match value("x264 or x265")?.as_str() {
                     "x264" => Codec::X264,
@@ -167,7 +168,7 @@ fn run(args: &[String]) -> Result<()> {
                 size: o.size,
                 scale: o.scale.unwrap_or(1),
                 codec: o.codec,
-                bitrate: o.bitrate.clone(),
+                rate: o.rate.clone(),
                 fps: o.fps,
                 hold: o.hold,
                 redundancy: o.red,

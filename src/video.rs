@@ -1,17 +1,28 @@
 // Turn a file into a video of numbered data frames, and back, using the ffmpeg command line.
+// Frames are streamed through ffmpeg's stdin/stdout as raw RGB, so nothing is written to disk and
+// memory use is one frame at a time, however large the file.
 use crate::container::{self, Added, Joiner, Redundancy};
 use crate::error::{Error, Result};
 use crate::frame::{self, Params};
 use crate::nnscale::{downscale, rescale};
 use std::ffi::OsString;
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::io::{Read, Write};
+use std::path::Path;
+use std::process::{Child, Command, Stdio};
+use std::thread::JoinHandle;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Codec {
     X264,
     X265,
+}
+
+/// How the encoder spends bits.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Rate {
+    Bitrate(String),
+    /// Constant quality: lower is better quality and a bigger file (x264 default 23).
+    Crf(u8),
 }
 
 #[derive(Clone, Debug)]
@@ -22,7 +33,8 @@ pub struct VideoOpts {
     /// Integer enlargement; the video is size * scale.
     pub scale: u32,
     pub codec: Codec,
-    pub bitrate: String,
+    /// Target bitrate such as "8M", or constant quality (`--crf`).
+    pub rate: Rate,
     pub fps: u32,
     /// Each frame is shown this many video frames in a row. Extra copies give the decoder more
     /// chances to read a frame the compressor mangled (at the cost of throughput).
@@ -43,40 +55,53 @@ pub struct DecodeStats {
     pub recovered_frames: usize,
 }
 
-/// Temp directory removed on drop.
-struct TempDir(PathBuf);
-
-impl TempDir {
-    fn new() -> Result<Self> {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.subsec_nanos())
-            .unwrap_or(0);
-        let dir = std::env::temp_dir().join(format!("yvs_{}_{nanos}", std::process::id()));
-        fs::create_dir_all(&dir)?;
-        Ok(TempDir(dir))
+fn ffmpeg_missing(e: std::io::Error, tool: &str) -> Error {
+    match e.kind() {
+        std::io::ErrorKind::NotFound => Error::External(format!("{tool} not found; install ffmpeg and put it on PATH")),
+        _ => Error::Io(e),
     }
 }
 
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
-
-fn ffmpeg(args: &[OsString]) -> Result<()> {
-    let out = Command::new("ffmpeg")
+/// Start ffmpeg with a piped stdin or stdout. A thread drains stderr so a chatty ffmpeg can't block.
+fn spawn_ffmpeg(args: &[OsString], pipe_stdin: bool, pipe_stdout: bool) -> Result<(Child, JoinHandle<String>)> {
+    let mut child = Command::new("ffmpeg")
         .args(["-y", "-loglevel", "error"])
         .args(args)
+        .stdin(if pipe_stdin { Stdio::piped() } else { Stdio::null() })
+        .stdout(if pipe_stdout { Stdio::piped() } else { Stdio::null() })
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| ffmpeg_missing(e, "ffmpeg"))?;
+    let mut stderr = child.stderr.take().expect("stderr is piped");
+    let drain = std::thread::spawn(move || {
+        let mut msg = String::new();
+        let _ = stderr.read_to_string(&mut msg);
+        msg
+    });
+    Ok((child, drain))
+}
+
+fn ffmpeg_failure(msg: String) -> Error {
+    Error::External(format!("ffmpeg failed: {}", msg.trim()))
+}
+
+/// Width and height of the first video stream.
+fn probe_size(video: &Path) -> Result<(usize, usize)> {
+    let out = Command::new("ffprobe")
+        .args(["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0"])
+        .arg(video)
         .output()
-        .map_err(|e| match e.kind() {
-            std::io::ErrorKind::NotFound => Error::External("ffmpeg not found; install it and put it on PATH".into()),
-            _ => Error::Io(e),
-        })?;
-    if !out.status.success() {
-        return Err(Error::External(format!("ffmpeg failed: {}", String::from_utf8_lossy(&out.stderr).trim())));
+        .map_err(|e| ffmpeg_missing(e, "ffprobe"))?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut nums = text.trim().split(',').filter_map(|n| n.trim().parse::<usize>().ok());
+    match (out.status.success(), nums.next(), nums.next()) {
+        (true, Some(w), Some(h)) if w > 0 && h > 0 => Ok((w, h)),
+        _ => Err(Error::External(format!(
+            "could not read the video size of {}: {}",
+            video.display(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ))),
     }
-    Ok(())
 }
 
 /// Number of video frames the data will need (before `hold` repetition).
@@ -84,7 +109,8 @@ pub fn plan(len: usize, o: &VideoOpts) -> Result<usize> {
     container::frames_needed(len, o.size.0, o.size.1, &o.params, o.redundancy)
 }
 
-/// Encode `data` into a video file. Returns the number of distinct frames (data plus parity).
+/// Encode `data` into a video file, streaming frames into ffmpeg. Returns the number of distinct
+/// frames (data plus parity).
 pub fn encode_video(data: &[u8], out: &Path, o: &VideoOpts) -> Result<usize> {
     if o.fps == 0 || o.hold == 0 || o.scale == 0 {
         return Err(Error::InvalidParameter("fps, hold and scale must be at least 1".into()));
@@ -93,50 +119,87 @@ pub fn encode_video(data: &[u8], out: &Path, o: &VideoOpts) -> Result<usize> {
     if vw % 2 != 0 || vh % 2 != 0 {
         return Err(Error::BadDimensions(format!("video size {vw}x{vh} must have even width and height")));
     }
-    let tmp = TempDir::new()?;
-    let mut count = 0;
-    for (i, frame) in container::split(data, o.size.0, o.size.1, &o.params, o.redundancy)?.enumerate() {
-        let img = rescale(&frame?, Some(o.scale), "nearest")?;
-        img.save(tmp.0.join(format!("f_{:06}.png", i + 1)))?;
-        count += 1;
-    }
+    let frames = container::split(data, o.size.0, o.size.1, &o.params, o.redundancy)?;
 
-    let mut args: Vec<OsString> = vec![
-        "-framerate".into(),
-        format!("{}/{}", o.fps, o.hold).into(),
-        "-i".into(),
-        tmp.0.join("f_%06d.png").into(),
-        "-r".into(),
-        o.fps.to_string().into(),
-    ];
+    let mut args: Vec<OsString> = ["-f", "rawvideo", "-pix_fmt", "rgb24", "-s"].map(OsString::from).to_vec();
+    args.push(format!("{vw}x{vh}").into());
+    args.extend(["-framerate".into(), format!("{}/{}", o.fps, o.hold).into(), "-i".into(), "-".into()]);
+    args.extend(["-r".into(), o.fps.to_string().into()]);
     let codec_args: &[&str] = match o.codec {
         Codec::X264 => &["-c:v", "libx264", "-preset", "medium"],
         Codec::X265 => &["-c:v", "libx265", "-preset", "fast", "-x265-params", "log-level=error"],
     };
     args.extend(codec_args.iter().map(OsString::from));
-    args.extend(["-b:v", &o.bitrate, "-pix_fmt", "yuv420p"].map(OsString::from));
+    match &o.rate {
+        Rate::Bitrate(b) => args.extend(["-b:v".into(), b.into()]),
+        Rate::Crf(c) => args.extend(["-crf".into(), c.to_string().into()]),
+    }
+    args.extend(["-pix_fmt", "yuv420p"].map(OsString::from));
     args.push(out.into());
-    ffmpeg(&args)?;
+
+    let (mut child, stderr) = spawn_ffmpeg(&args, true, false)?;
+    let mut stdin = child.stdin.take().expect("stdin is piped");
+    let mut count = 0;
+    let mut write_failed = false;
+    for frame in frames {
+        let img = match frame.and_then(|f| rescale(&f, Some(o.scale), "nearest")) {
+            Ok(img) => img,
+            Err(e) => {
+                drop(stdin);
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = stderr.join();
+                return Err(e);
+            }
+        };
+        if stdin.write_all(img.as_raw()).is_err() {
+            write_failed = true; // ffmpeg exited early; its stderr says why
+            break;
+        }
+        count += 1;
+    }
+    drop(stdin);
+    let status = child.wait()?;
+    let msg = stderr.join().unwrap_or_default();
+    if !status.success() || write_failed {
+        return Err(ffmpeg_failure(msg));
+    }
     Ok(count)
 }
 
-/// Decode a video produced by `encode_video` (or a re-encode of it, such as a YouTube download).
-/// `scale = None` detects the block size automatically.
+/// Decode a video produced by `encode_video` (or a re-encode of it, such as a YouTube download),
+/// streaming frames out of ffmpeg one at a time. `scale = None` detects the block size automatically.
 pub fn decode_video(video: &Path, scale: Option<u32>) -> Result<(Vec<u8>, DecodeStats)> {
-    let tmp = TempDir::new()?;
-    let pattern = tmp.0.join("o_%06d.png");
-    ffmpeg(&["-i".into(), video.into(), "-fps_mode".into(), "passthrough".into(), pattern.into()])?;
-
-    let mut files: Vec<PathBuf> = fs::read_dir(&tmp.0)?
-        .filter_map(|e| e.ok().map(|e| e.path()))
+    let (w, h) = probe_size(video)?;
+    let args: Vec<OsString> = ["-i"]
+        .map(OsString::from)
+        .into_iter()
+        .chain([video.as_os_str().to_owned()])
+        .chain(["-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"].map(OsString::from))
         .collect();
-    files.sort();
+    let (mut child, stderr) = spawn_ffmpeg(&args, false, true)?;
+    let mut stdout = child.stdout.take().expect("stdout is piped");
 
-    let mut stats = DecodeStats { video_frames: files.len(), scale: scale.unwrap_or(0), ..Default::default() };
+    let mut stats = DecodeStats { scale: scale.unwrap_or(0), ..Default::default() };
     let mut joiner = Joiner::new();
     let mut last_err: Option<Error> = None;
-    for path in &files {
-        let img = image::open(path)?.to_rgb8();
+    loop {
+        let mut buf = vec![0u8; w * h * 3];
+        // Fill one frame; a short read means the stream ended (a cut-off final frame is dropped).
+        let mut filled = 0;
+        while filled < buf.len() {
+            match stdout.read(&mut buf[filled..]) {
+                Ok(0) => break,
+                Ok(n) => filled += n,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
+        if filled < buf.len() {
+            break;
+        }
+        stats.video_frames += 1;
+        let img = image::RgbImage::from_raw(w as u32, h as u32, buf).expect("buffer matches size");
         if stats.scale == 0 {
             match frame::detect_scale(&img) {
                 Some(s) => stats.scale = s,
@@ -156,9 +219,17 @@ pub fn decode_video(video: &Path, scale: Option<u32>) -> Result<(Vec<u8>, Decode
             }
         }
         if joiner.is_complete() {
-            break; // everything we need; skip the remaining duplicates
+            break; // everything we need; don't decode the rest of the video
         }
     }
+    drop(stdout);
+    let _ = child.kill(); // no-op if ffmpeg already finished
+    let status = child.wait()?;
+    let msg = stderr.join().unwrap_or_default();
+    if stats.video_frames == 0 && !status.success() {
+        return Err(ffmpeg_failure(msg));
+    }
+
     stats.corrected_bytes = joiner.corrected_bytes;
     let result = joiner.finish();
     stats.recovered_frames = joiner.recovered_frames;
@@ -176,6 +247,28 @@ pub fn decode_video(video: &Path, scale: Option<u32>) -> Result<(Vec<u8>, Decode
 mod tests {
     use super::*;
     use crate::frame::Mode;
+    use std::path::PathBuf;
+
+    /// Temp directory removed on drop.
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new() -> Result<Self> {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.subsec_nanos())
+                .unwrap_or(0);
+            let dir = std::env::temp_dir().join(format!("yvs_{}_{nanos}", std::process::id()));
+            std::fs::create_dir_all(&dir)?;
+            Ok(TempDir(dir))
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
 
     fn have_x264() -> bool {
         Command::new("ffmpeg")
@@ -191,7 +284,7 @@ mod tests {
             size: (480, 270),
             scale: 4,
             codec: Codec::X264,
-            bitrate: "8M".into(),
+            rate: Rate::Bitrate("8M".into()),
             fps: 30,
             hold,
             redundancy: Redundancy::NONE,

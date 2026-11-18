@@ -90,7 +90,9 @@ Takeaways: lossless 256-level frames never survive; 2 levels with 4px blocks is 
 
 `encode-video` splits a file across numbered frames. Each frame carries a small chunk header (frame index, total frames, file length, file CRC-32) inside its Reed-Solomon protected payload, so frames can arrive in any order, repeated frames are ignored, a missing or unreadable frame is reported by number, and the reassembled file is verified end to end. The block size is auto-detected when decoding. `--hold N` shows every frame N times in the video so the decoder can fall back on another copy. ffmpeg turns the frames into an H.264/H.265 MP4.
 
-Throughput is limited by the video bitrate: the default preset carries ~14 KB per frame, about 3.4 Mbit/s at 30 fps of incompressible data, and the compressor has to pass all of it through. Measured with 22 random frames: x264 round-tripped at 3 Mbit/s and up; x265 (`fast` preset) failed on the later frames below 8 Mbit/s even with `--hold 2`. The default is x264 at 8M (YouTube recommends 10 Mbit/s for 1080p30). A video whose frames can't all be recovered fails with the list of missing frame numbers. 
+Frames are streamed through ffmpeg's stdin/stdout as raw RGB (both when encoding and decoding), so nothing is written to disk and the tool holds one frame at a time however large the file is. Decoding stops as soon as enough frames have arrived and kills ffmpeg rather than reading the rest. Needs `ffmpeg` and `ffprobe` on PATH. A 20 MB file became 1,561 frames (52 s of video) and round-tripped byte-identical.
+
+Throughput is limited by what the compressor can pass through: each default frame is ~14 KB of incompressible noise, and carrying it takes about 12 Mbit/s of video, well above its 3.4 Mbit/s information rate. Fixed-bitrate encodes look fine on short clips (a 22-frame clip survived 3 Mbit/s) because the rate control has slack, but fail partway through longer ones: with 469 frames, x264 at 8 Mbit/s lost half the frames from frame ~200 onward, while 12 Mbit/s was fine. So `encode-video` defaults to constant quality (`--crf 23`, x264 and x265 both verified), and `--bitrate 8M` is available if you need a size cap. Expect a video roughly four times the file size. A video whose frames can't all be recovered fails with the list of missing frame numbers.
 
 ### Parity frames
 
@@ -103,7 +105,7 @@ cargo run -- encode input.txt frame.png [--rgb] [--size WxH] [--scale N] [--ecc 
 cargo run -- decode frame.png output.txt [--scale N]
 
 # a whole file as a video (needs ffmpeg on PATH); the --youtube preset is the default:
-cargo run --release -- encode-video bigfile.zip data.mp4 [--codec x264|x265] [--bitrate 8M] [--hold 2] [--group 10 --parity 1]
+cargo run --release -- encode-video bigfile.zip data.mp4 [--codec x264|x265] [--crf 23 | --bitrate 12M] [--hold 2] [--group 10 --parity 1]
 cargo run --release -- decode-video data.mp4 bigfile.zip
 
 # a single frame meant for lossy video (1920x1080 frame, ~14 KB):
