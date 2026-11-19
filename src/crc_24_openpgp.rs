@@ -1,46 +1,37 @@
-// Cyclic Redundancy Check (CRC) implementation for pixel columns on PNG images.
-use image::{ImageBuffer, Luma, Rgb, Pixel};    // Implementation for Luma<u8> and Rgb<u8> images
-use crc::{Crc,  CRC_24_OPENPGP};
-use std::io::{self};
+// Per-column CRC-24/OPENPGP for RGB frames. The CRC of every column (all rows except the
+// last) is stored as an RGB pixel in the last row of that column.
+use crc::{Crc, CRC_24_OPENPGP};
+use image::{Rgb, RgbImage};
 
 pub const CRC_24: Crc<u32> = Crc::<u32>::new(&CRC_24_OPENPGP);
 
-pub fn gen_col_crc24(img: &ImageBuffer<Luma<u8>, Vec<u8>>, x_col: u32) -> io::Result<Vec<u8>>{
-    let mut crc = CRC_24.digest();  // Initialize CRC
-
-    for y in 0..img.height() {
-        let pixel = img.get_pixel(x_col, y);
-        let image::Luma(data) = *pixel;
-
-        crc.update(&data);  // Update CRC with pixel data of entire column
+/// CRC-24 of column `x`, covering every row except the final (CRC) row.
+pub fn gen_col_crc24(img: &RgbImage, x: u32) -> [u8; 3] {
+    let mut crc = CRC_24.digest();
+    for y in 0..img.height().saturating_sub(1) {
+        crc.update(&img.get_pixel(x, y).0);
     }
-
-    let crc_u32 = crc.finalize();  // Return CRC as a vector of bytes (u8) 
-
-    //let mut crc_out = Vec::new();
-
-    // Slice CRC into 3 bytes (24 bits)
-     let crc_out = crc_u32.to_le_bytes()[0..3].to_vec();
-
-    Ok(crc_out)
+    let b = crc.finalize().to_le_bytes();
+    [b[0], b[1], b[2]]
 }
 
-// Open image, generate CRC for each column, and return a new image with the CRC values as the pixel data on last row
-pub fn gen_img_crc(img: &ImageBuffer<Luma<u8>, Vec<u8>>) -> io::Result<ImageBuffer<Rgb<u8>, Vec<u8>>> {
-    let (width, height) = img.dimensions();
-    let mut crc_img: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::new(width, height);
-
-    for (x, y, pixel) in crc_img.enumerate_pixels_mut() {
-        *pixel = img.get_pixel(x, y).to_rgb();  // Copy image data to new image
+/// Write each column's CRC into the last row of the image.
+pub fn write_crcs(img: &mut RgbImage) {
+    let last = img.height() - 1;
+    for x in 0..img.width() {
+        let crc = gen_col_crc24(img, x);
+        img.put_pixel(x, last, Rgb(crc));
     }
-
-    for x in 0..img.width() {   // Generate CRC for each column as a vector of bytes (u8)
-        let crc = gen_col_crc24(img, x);    // Generate CRC for column x
-        let pixel = crc_img.get_pixel_mut(x, height-1);   // Get pixel at last row of column x
-
-        *pixel = image::Rgb([crc.as_ref().unwrap()[0], crc.as_ref().unwrap()[1], crc.as_ref().unwrap()[2]]);  // Set pixel to CRC value
-        // *pixel = image::Rgb([0, 0, 0]);  // Set all pixels to black in RGB mode
-    }
-
-    Ok(crc_img)
 }
+
+/// Return the x-coordinates of all columns whose stored CRC does not match.
+pub fn bad_columns(img: &RgbImage) -> Vec<u32> {
+    if img.height() < 2 {
+        return (0..img.width()).collect();
+    }
+    let last = img.height() - 1;
+    (0..img.width())
+        .filter(|&x| img.get_pixel(x, last).0 != gen_col_crc24(img, x))
+        .collect()
+}
+
